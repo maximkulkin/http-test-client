@@ -1,0 +1,8 @@
+*.pyc
+*.pyo
+/build/
+/dist/
+/.tox/
+/.eggs/
+/.cache/
+/http_test_client.egg-info/
