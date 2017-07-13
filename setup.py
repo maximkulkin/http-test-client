@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='http_test_client',
-    version='0.1',
+    version='0.2',
     description='Library to simplify writing HTTP REST service integration tests',
     author='Maxim Kulkin',
     author_email='maxim.kulkin@gmail.com',
