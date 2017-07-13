@@ -17,6 +17,9 @@ class ClientError(Exception):
         self.status_code = status_code
 
 
+Response = namedtuple('Response', ['status_code', 'headers', 'text'])
+
+
 class DummyTransport(object):
     '''
     Transport that just prints executed requests
@@ -48,9 +51,6 @@ class HttpTransport(object):
         )
 
         return self._session.send(self._session.prepare_request(request))
-
-
-Response = namedtuple('Response', ['status_code', 'headers', 'text'])
 
 
 class Client(object):
@@ -188,11 +188,11 @@ class RestResources(Api):
 
     Uses Client's Cleanup API to register created resources for cleanup.
     '''
-    def list(self):
-        return self._client.request(self._url)
+    def list(self, **kwargs):
+        return self._client.request(self._url, **kwargs)
 
-    def create(self, **kwargs):
-        result = self._client.request(self._url, method='POST', data=kwargs)
+    def create(self, data, **kwargs):
+        result = self._client.request(self._url, method='POST', data=data, **kwargs)
         if isinstance(result, dict) and 'id' in result:
             id = result['id']
             self._client.add_cleanup(
@@ -207,14 +207,14 @@ class RestResources(Api):
         )
 
     class Resource(Api):
-        def get(self):
-            return self._client.request(self._url)
+        def get(self, **kwargs):
+            return self._client.request(self._url, **kwargs)
 
-        def update(self, **kwargs):
-            return self._client.request(self._url, method='PUT', data=kwargs)
+        def update(self, data, **kwargs):
+            return self._client.request(self._url, method='PUT', data=data, **kwargs)
 
-        def delete(self):
-            response = self._client.raw_request(self._url, method='DELETE')
+        def delete(self, **kwargs):
+            response = self._client.raw_request(self._url, method='DELETE', **kwargs)
 
             if response.status_code not in six.moves.range(200, 299) and \
                     response.status_code != 404:
@@ -241,4 +241,5 @@ def api(path, klass):
 
 
 def resources(path, klass=RestResources):
+    '''Convenience synonym to `api()`'''
     return api(path, klass)

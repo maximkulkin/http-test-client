@@ -245,8 +245,6 @@ class TestRestResources:
     @pytest.fixture
     def session(self):
         session = m.mock()
-        when(session).raw_request(m.any(), method='DELETE')\
-            .thenReturn(Response(204, {}, ''))
         return session
 
     def test_resources_list(self, session):
@@ -254,13 +252,28 @@ class TestRestResources:
 
         assert RestResources(session, '/users').list() == ['foo', 'bar']
 
+    def test_passing_extra_params_to_resources_list(self, session):
+        when(session).request('/users', params={'baz': 'bam'})\
+            .thenReturn(["foo", "bar"])
+
+        assert RestResources(session, '/users').list(params={'baz': 'bam'}) == ['foo', 'bar']
+
     def test_resources_create(self, session):
         when(session)\
             .request('/users', method='POST', data={'foo': 'bar', 'baz': 123})\
             .thenReturn({'id': 'id1'})
 
         assert RestResources(session, '/users')\
-            .create(foo='bar', baz=123) == {'id': 'id1'}
+            .create({'foo': 'bar', 'baz': 123}) == {'id': 'id1'}
+
+    def test_passing_extra_params_to_resources_create(self, session):
+        when(session)\
+            .request('/users', method='POST', data={'foo': 'bar', 'baz': 123},
+                     params={'bam': '123'})\
+            .thenReturn({'id': 'id1'})
+
+        assert RestResources(session, '/users')\
+            .create({'foo': 'bar', 'baz': 123}, params={'bam': '123'}) == {'id': 'id1'}
 
     def test_resource_get(self, session):
         when(session).request('/users/user1')\
@@ -269,17 +282,44 @@ class TestRestResources:
         assert RestResources(session, '/users')['user1']\
             .get() == {'id': 'user1', 'name': 'John'}
 
+    def test_passing_extra_params_to_resource_get(self, session):
+        when(session).request('/users/user1', params={'foo': 'bar'})\
+            .thenReturn({'id': 'user1', 'name': 'John'})
+
+        assert RestResources(session, '/users')['user1']\
+            .get(params={'foo': 'bar'}) == {'id': 'user1', 'name': 'John'}
+
     def test_resource_update(self, session):
         when(session).request('/users/user1', method='PUT', data={'name': 'Jane'})\
             .thenReturn({'id': 'user1', 'name': 'Jane'})
 
         assert RestResources(session, '/users')['user1']\
-            .update(name='Jane') == {'id': 'user1', 'name': 'Jane'}
+            .update({'name': 'Jane'}) == {'id': 'user1', 'name': 'Jane'}
+
+    def test_passing_extra_params_to_resource_update(self, session):
+        when(session).request('/users/user1', method='PUT',
+                              data={'name': 'Jane'}, params={'foo': 'bar'})\
+            .thenReturn({'id': 'user1', 'name': 'Jane'})
+
+        assert RestResources(session, '/users')['user1']\
+            .update({'name': 'Jane'}, params={'foo': 'bar'}) == {'id': 'user1', 'name': 'Jane'}
 
     def test_resource_delete(self, session):
+        when(session).raw_request(m.any(), method='DELETE')\
+            .thenReturn(Response(204, {}, ''))
+
         RestResources(session, '/users')['user1'].delete()
 
         verify(session).raw_request('/users/user1', method='DELETE')
+
+    def test_passing_extra_params_to_resource_delete(self, session):
+        when(session).raw_request(m.any(), method='DELETE', params={'foo': 'bar'})\
+            .thenReturn(Response(204, {}, ''))
+
+        RestResources(session, '/users')['user1'].delete(params={'foo': 'bar'})
+
+        verify(session).raw_request('/users/user1', method='DELETE',
+                                    params={'foo': 'bar'})
 
     def test_resource_delete_ignores_404_response(self, session):
         when(session).raw_request('/users/user1', method='DELETE')\
@@ -300,11 +340,15 @@ class TestRestResources:
         when(session).request('/users', method='POST', data=m.any())\
             .thenReturn({'id': 'john'})
 
-        RestResources(session, '/users').create(name='John Doe')
+        RestResources(session, '/users').create({'name': 'John Doe'})
 
         func_captor = m.captor(m.arg_that(callable))
 
         verify(session).add_cleanup('/users/john', func_captor)
+
+
+        when(session).raw_request(m.any(), method='DELETE')\
+            .thenReturn(Response(204, {}, ''))
 
         (func_captor.value)()
 
@@ -371,11 +415,15 @@ class TestRestResources:
         when(session).request('/users/user1/articles', method='POST', data=m.any())\
             .thenReturn({'id': 'article1'})
 
-        users['user1'].articles.create(name='John Doe')
+        users['user1'].articles.create({'name': 'John Doe'})
 
         func_captor = m.captor(m.arg_that(callable))
 
         verify(session).add_cleanup('/users/user1/articles/article1', func_captor)
+
+
+        when(session).raw_request(m.any(), method='DELETE')\
+            .thenReturn(Response(204, {}, ''))
 
         (func_captor.value)()
 
@@ -387,6 +435,9 @@ class TestRestResources:
                 articles = resources('/articles')
 
         users = UserResources(session, '/users')
+
+        when(session).raw_request(m.any(), method='DELETE')\
+            .thenReturn(Response(204, {}, ''))
 
         users['john'].articles['article1'].delete()
 
