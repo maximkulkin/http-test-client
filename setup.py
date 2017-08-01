@@ -1,9 +1,11 @@
 from setuptools import setup
 
+
 setup(
     name='http_test_client',
     version='0.2',
     description='Library to simplify writing HTTP REST service integration tests',
+    long_description=open('README.rst').read(),
     author='Maxim Kulkin',
     author_email='maxim.kulkin@gmail.com',
     url='https://github.com/maximkulkin/http-test-client',
