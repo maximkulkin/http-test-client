@@ -8,13 +8,14 @@ import six.moves
 
 
 class ClientError(Exception):
-    def __init__(self, status_code, message):
-        if not message:
+    def __init__(self, status_code, text):
+        if not text:
             message = 'Status code %d' % status_code
         else:
-            message += ' (status code %d)' % status_code
+            message = '%s (status code %d)' % (text, status_code)
         super(ClientError, self).__init__(message)
         self.status_code = status_code
+        self.text = text
 
 
 Response = namedtuple('Response', ['status_code', 'headers', 'text'])
