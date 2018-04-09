@@ -1,5 +1,5 @@
-from http_test_client import Response, RestResources, ClientError, \
-    HttpTransport, Client, resources
+from http_test_client import Response, RestResources, RestResource, ClientError, \
+    HttpTransport, Client, resources, api
 from mockito import when, verify, verifyNoMoreInteractions
 import mockito as m
 import pytest
@@ -41,7 +41,7 @@ def verify_request(transport, url=m.any(), method=m.any(),
     verify(transport).request(url=url, method=method, headers=headers, data=data)
 
 
-class ClenaupCallbacks:
+class CleanupCallbacks:
     def __init__(self):
         self.calls = []
 
@@ -153,15 +153,6 @@ class TestClient:
         client = Client(transport)
         assert client.request('/foo') is None
 
-    def test_request_returns_None_if_response_status_code_is_404(self, transport):
-        when(transport).request(
-            url=m.any(), method=m.any(),
-            headers=m.any(), data=m.any(),
-        ).thenReturn(Response(404, {}, ''))
-
-        client = Client(transport)
-        assert client.request('/foo') is None
-
     def test_request_raises_ClientError_if_response_status_code_is_not_2xx(self, transport):
         when(transport).request(
             url=m.any(), method=m.any(),
@@ -218,7 +209,7 @@ class TestClient:
         assert sorted(callbacks.calls) == sorted(['cleanup2'])
 
     def test_multiple_cleanups_for_same_url(self, transport):
-        callbacks = ClenaupCallbacks()
+        callbacks = CleanupCallbacks()
 
         client = Client(transport)
         client.add_cleanup('/foo', callbacks.cleanup1)
@@ -229,7 +220,7 @@ class TestClient:
         assert sorted(callbacks.calls) == sorted(['cleanup1', 'cleanup2'])
 
     def test_removal_of_multiple_cleanups_for_same_url(self, transport):
-        callbacks = ClenaupCallbacks()
+        callbacks = CleanupCallbacks()
 
         client = Client(transport)
         client.add_cleanup('/foo', callbacks.cleanup1)
@@ -248,15 +239,29 @@ class TestRestResources:
         return session
 
     def test_resources_list(self, session):
-        when(session).request('/users').thenReturn(["foo", "bar"])
+        when(session).request('/users', method='GET').thenReturn(["foo", "bar"])
 
         assert RestResources(session, '/users').list() == ['foo', 'bar']
 
     def test_passing_extra_params_to_resources_list(self, session):
-        when(session).request('/users', params={'baz': 'bam'})\
+        when(session).request('/users', method='GET', params={'baz': 'bam'})\
             .thenReturn(["foo", "bar"])
 
         assert RestResources(session, '/users').list(params={'baz': 'bam'}) == ['foo', 'bar']
+
+    def test_resources_list_raises_ClientError_if_status_code_is_wrong(self, session):
+        when(session).request('/users', method='GET')\
+            .thenRaise(ClientError(500, 'internal error'))
+
+        with pytest.raises(ClientError):
+            RestResources(session, '/users').list()
+
+    def test_resources_list_raises_ClientError_if_status_code_is_404(self, session):
+        when(session).request('/users', method='GET')\
+            .thenRaise(ClientError(404, 'internal error'))
+
+        with pytest.raises(ClientError):
+            RestResources(session, '/users').list()
 
     def test_resources_create(self, session):
         when(session)\
@@ -276,14 +281,27 @@ class TestRestResources:
             .create({'foo': 'bar', 'baz': 123}, params={'bam': '123'}) == {'id': 'id1'}
 
     def test_resource_get(self, session):
-        when(session).request('/users/user1')\
+        when(session).request('/users/user1', method='GET')\
             .thenReturn({'id': 'user1', 'name': 'John'})
 
         assert RestResources(session, '/users')['user1']\
             .get() == {'id': 'user1', 'name': 'John'}
 
+    def test_resource_get_raises_ClientError_if_status_code_is_wrong(self, session):
+        when(session).request('/users/user1', method='GET')\
+            .thenRaise(ClientError(500, 'internal server error'))
+
+        with pytest.raises(ClientError):
+            RestResources(session, '/users')['user1'].get()
+
+    def test_resource_get_returns_None_on_404(self, session):
+        when(session).request('/users/user1', method='GET')\
+            .thenRaise(ClientError(404, 'not found'))
+
+        assert RestResources(session, '/users')['user1'].get() is None
+
     def test_passing_extra_params_to_resource_get(self, session):
-        when(session).request('/users/user1', params={'foo': 'bar'})\
+        when(session).request('/users/user1', method='GET', params={'foo': 'bar'})\
             .thenReturn({'id': 'user1', 'name': 'John'})
 
         assert RestResources(session, '/users')['user1']\
@@ -304,34 +322,48 @@ class TestRestResources:
         assert RestResources(session, '/users')['user1']\
             .update({'name': 'Jane'}, params={'foo': 'bar'}) == {'id': 'user1', 'name': 'Jane'}
 
+    def test_resource_update_raises_ClientError_if_status_code_is_wrong(self, session):
+        when(session).request('/users/user1', method='PUT', data={'name': 'Jane'})\
+            .thenRaise(ClientError(500, 'internal server error'))
+
+        with pytest.raises(ClientError):
+            RestResources(session, '/users')['user1'].update({'name': 'Jane'})
+
+    def test_resource_update_raises_ClientError_if_status_code_is_404(self, session):
+        when(session).request('/users/user1', method='PUT', data={'name': 'Jane'})\
+            .thenRaise(ClientError(404, 'not found'))
+
+        with pytest.raises(ClientError):
+            RestResources(session, '/users')['user1'].update({'name': 'Jane'})
+
     def test_resource_delete(self, session):
-        when(session).raw_request(m.any(), method='DELETE')\
+        when(session).request(m.any(), method='DELETE')\
             .thenReturn(Response(204, {}, ''))
 
         RestResources(session, '/users')['user1'].delete()
 
-        verify(session).raw_request('/users/user1', method='DELETE')
+        verify(session).request('/users/user1', method='DELETE')
 
     def test_passing_extra_params_to_resource_delete(self, session):
-        when(session).raw_request(m.any(), method='DELETE', params={'foo': 'bar'})\
+        when(session).request(m.any(), method='DELETE', params={'foo': 'bar'})\
             .thenReturn(Response(204, {}, ''))
 
         RestResources(session, '/users')['user1'].delete(params={'foo': 'bar'})
 
-        verify(session).raw_request('/users/user1', method='DELETE',
-                                    params={'foo': 'bar'})
+        verify(session).request('/users/user1', method='DELETE',
+                                params={'foo': 'bar'})
 
     def test_resource_delete_ignores_404_response(self, session):
-        when(session).raw_request('/users/user1', method='DELETE')\
+        when(session).request('/users/user1', method='DELETE')\
             .thenReturn(Response(404, {}, 'user not found'))
 
         RestResources(session, '/users')['user1'].delete()
 
-        verify(session).raw_request('/users/user1', method='DELETE')
+        verify(session).request('/users/user1', method='DELETE')
 
     def test_resource_delete_raises_ClientError_if_status_code_is_wrong(self, session):
-        when(session).raw_request('/users/user1', method='DELETE')\
-            .thenReturn(Response(500, {}, 'internal server error'))
+        when(session).request('/users/user1', method='DELETE')\
+            .thenRaise(ClientError(500, 'internal server error'))
 
         with pytest.raises(ClientError):
             RestResources(session, '/users')['user1'].delete()
@@ -347,12 +379,12 @@ class TestRestResources:
         verify(session).add_cleanup('/users/john', func_captor)
 
 
-        when(session).raw_request(m.any(), method='DELETE')\
+        when(session).request(m.any(), method='DELETE')\
             .thenReturn(Response(204, {}, ''))
 
         (func_captor.value)()
 
-        verify(session).raw_request('/users/john', method='DELETE')
+        verify(session).request('/users/john', method='DELETE')
 
     def test_unregistering_cleanup_on_delete(self, session):
         RestResources(session, '/users')['john'].delete()
@@ -376,7 +408,8 @@ class TestRestResources:
 
     def test_custom_resource_methods(self, session):
         class UserResources(RestResources):
-            class Resource(RestResources.Resource):
+            @api('/{user_id}')
+            class Resource(RestResource):
                 def tap(self):
                     return self._client.request(self._url + '/tap', method='POST')
 
@@ -388,7 +421,8 @@ class TestRestResources:
 
     def test_nesting_resources(self, session):
         class UserResources(RestResources):
-            class Resource(RestResources.Resource):
+            @api('/{user_id}')
+            class Resource(RestResource):
                 articles = resources('/articles')
 
         users = UserResources(session, '/users')
@@ -396,18 +430,22 @@ class TestRestResources:
         articles = [{'id': 'article1', 'title': 'Article 1'},
                     {'id': 'article2', 'title': 'Article 2'}]
 
-        when(session).request('/users/user1/articles').thenReturn(articles)
+        when(session).request('/users/user1/articles', method='GET')\
+            .thenReturn(articles)
 
         assert users['user1'].articles.list() == articles
 
-        when(session).request('/users/user1/articles/%s' % articles[0]['id'])\
-            .thenReturn(articles[0])
+        when(session).request(
+            '/users/user1/articles/%s' % articles[0]['id'],
+            method='GET',
+        ).thenReturn(articles[0])
 
         assert users['user1'].articles[articles[0]['id']].get() == articles[0]
 
     def test_nested_resources_registering_cleanup_on_create(self, session):
         class UserResources(RestResources):
-            class Resource(RestResources.Resource):
+            @api('/{user_id}')
+            class Resource(RestResource):
                 articles = resources('/articles')
 
         users = UserResources(session, '/users')
@@ -422,16 +460,17 @@ class TestRestResources:
         verify(session).add_cleanup('/users/user1/articles/article1', func_captor)
 
 
-        when(session).raw_request(m.any(), method='DELETE')\
+        when(session).request(m.any(), method='DELETE')\
             .thenReturn(Response(204, {}, ''))
 
         (func_captor.value)()
 
-        verify(session).raw_request('/users/user1/articles/article1', method='DELETE')
+        verify(session).request('/users/user1/articles/article1', method='DELETE')
 
     def test_unregistering_cleanup_on_delete(self, session):
         class UserResources(RestResources):
-            class Resource(RestResources.Resource):
+            @api('/{user_id}')
+            class Resource(RestResource):
                 articles = resources('/articles')
 
         users = UserResources(session, '/users')

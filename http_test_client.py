@@ -1,6 +1,7 @@
 from collections import namedtuple
 import json
 import logging
+import re
 import requests
 import urllib
 import six
@@ -19,6 +20,24 @@ class ClientError(Exception):
 
 
 Response = namedtuple('Response', ['status_code', 'headers', 'text'])
+
+
+PARAM_RE = re.compile(r'^/(?:[^{]+/)*\{(.+)\}$')
+
+
+class ApiNamespace(object):
+    def __init__(self, path, klass):
+        self.path = path
+        m = PARAM_RE.match(path)
+        self._param_name = m.group(1) if m else None
+        self.klass = klass
+
+    def __get__(self, obj, objtype=None):
+        if self._param_name:
+            raise AttributeError()
+        if obj is None:
+            return self
+        return self.klass(obj._client, obj._url + self.path)
 
 
 class DummyTransport(object):
@@ -124,12 +143,16 @@ class Client(object):
         )
 
         if response.status_code not in six.moves.range(200, 299):
-            if response.status_code == 404:
-                return None
-            else:
-                raise ClientError(response.status_code, response.text)
+            raise ClientError(response.status_code, response.text)
 
         return json.loads(response.text) if len(response.text) > 0 else None
+
+    # compatibility with Api
+    def _raw_request(self, *args, **kwargs):
+        return super(Client, self).raw_request(*args, **kwargs)
+
+    def _request(self, *args, **kwargs):
+        return super(Client, self).request(*args, **kwargs)
 
     def _log_request(self, url, method, headers, data):
         """Log request"""
@@ -152,10 +175,33 @@ class Client(object):
         self.logger.debug('Got response %s', s)
 
 
+class ApiMeta(type):
+    def __new__(mcs, name, bases, attrs):
+        params = {attr_name: attr_value
+                  for attr_name, attr_value in attrs.iteritems()
+                  if isinstance(attr_value, ApiNamespace) and attr_value._param_name}
+
+        if len(params) > 1:
+            raise ValueError('Multiple param APIs are not supported')
+        elif len(params) == 1:
+            param_api = params.values()[0]
+
+            def getitem(self, param_value):
+                return param_api.klass(
+                    self._client, self._url + '/' + urllib.quote(param_value),
+                )
+
+            attrs['__getitem__'] = getitem
+
+        return super(ApiMeta, mcs).__new__(mcs, name, bases, attrs)
+
+
 class Api(object):
     '''
     Base class for all HTTP APIs. Maintains a client and base url.
     '''
+    __metaclass__ = ApiMeta
+
     def __init__(self, client, url, **kwargs):
         """
         Args:
@@ -168,8 +214,56 @@ class Api(object):
         for k, v in six.iteritems(kwargs):
             setattr(self, k, v)
 
+    def _raw_request(self, url=None, *args, **kwargs):
+        return self._client.raw_request(self._url + (url or ''), *args, **kwargs)
+
+    def _request(self, url=None, *args, **kwargs):
+        return self._client.request(self._url + (url or ''), *args, **kwargs)
+
     def __repr__(self):
         return '<%s %s>' % (self.__class__.__name__, self._url)
+
+
+def api(path, klass=None):
+    '''
+    Returns property that instantiates and returns specified Api class instance
+    passing it client and suburl, derived from self url and given path.
+
+    :param path: (string) URI path relative to parent resource
+    :param klass: (Api) Api class to instantiate
+    :return: Property descriptor
+    '''
+    def wrapper(klass):
+        if not issubclass(klass, Api):
+            klass = type(klass.__name__, (klass, Api), {})
+        return ApiNamespace(path, klass)
+
+    if klass:
+        return wrapper(klass)
+
+    return wrapper
+
+
+class RestResource(Api):
+    def get(self, **kwargs):
+        try:
+            return self._request(method='GET', **kwargs)
+        except ClientError as ce:
+            if ce.status_code != 404:
+                raise ce
+            return None
+
+    def update(self, data, **kwargs):
+        return self._request(method='PUT', data=data, **kwargs)
+
+    def delete(self, **kwargs):
+        try:
+            response = self._request(method='DELETE', **kwargs)
+        except ClientError as ce:
+            if ce.status_code != 404:
+                raise ce
+
+        self._client.remove_cleanup(self._url)
 
 
 class RestResources(Api):
@@ -179,68 +273,38 @@ class RestResources(Api):
 
     Example:
 
-        users = RestResource(client, '/users')
+        users = RestResources(client, '/users')
         users.list() # => [{'id': '1', 'name': 'John'}, ... ]
-        users.create(name='Jane') # => {'id': '2'}
+        users.create({'name': 'Jane'}) # => {'id': '2'}
 
         users['2'].get() # => {'id': '2', 'name': 'Jane'}
-        users['2'].update(name='Jane Doe')
+        users['2'].update({'name': 'Jane Doe'})
         users['2'].delete()
 
     Uses Client's Cleanup API to register created resources for cleanup.
     '''
     def list(self, **kwargs):
-        return self._client.request(self._url, **kwargs)
+        return self._request(method='GET', **kwargs)
 
     def create(self, data, **kwargs):
-        result = self._client.request(self._url, method='POST', data=data, **kwargs)
+        result = self._request(method='POST', data=data, **kwargs)
         if isinstance(result, dict) and 'id' in result:
-            id = result['id']
-            self._client.add_cleanup(
-                self._url + '/' + urllib.quote(id), self[id].delete,
-            )
+            resource_api = self[result['id']]
+            self._client.add_cleanup(resource_api._url, resource_api.delete)
         return result
 
-    def __getitem__(self, id):
-        return self.Resource(
-            self._client, self._url + '/' + urllib.quote(id),
-            parent_ids=getattr(self, 'parent_ids', []) + [id],
-        )
-
-    class Resource(Api):
-        def get(self, **kwargs):
-            return self._client.request(self._url, **kwargs)
-
-        def update(self, data, **kwargs):
-            return self._client.request(self._url, method='PUT', data=data, **kwargs)
-
-        def delete(self, **kwargs):
-            response = self._client.raw_request(self._url, method='DELETE', **kwargs)
-
-            if response.status_code not in six.moves.range(200, 299) and \
-                    response.status_code != 404:
-                raise ClientError(response.status_code, response.text)
-
-            self._client.remove_cleanup(self._url)
-
-
-def api(path, klass):
-    '''
-    Returns property that instantiates and returns specified Api class instance
-    passing it client and suburl, derived from self url and given path.
-
-    :param path: (string) URI path relative to parent resource
-    :param klass: (Api) Api class to instantiate
-    :return: Property descriptor
-    '''
-    assert issubclass(klass, Api), 'Resource klass should be subclass of Api'
-
-    def get(self):
-        return klass(self._client, self._url + path)
-
-    return property(get)
+    @api('/{resource_id}')
+    class Resource(RestResource):
+        pass
 
 
 def resources(path, klass=RestResources):
-    '''Convenience synonym to `api()`'''
-    return api(path, klass)
+    '''Convenience shortcut for defining REST resources API
+
+    Example:
+
+        class Client(http_test_client.Client):
+            users = resources('/users')
+
+    '''
+    return api(path, RestResources)

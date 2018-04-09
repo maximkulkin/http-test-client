@@ -15,11 +15,11 @@ Example
 
     class ArticleResources(RestResources):
         def search(self, query):
-            return self._client.request(self._url + '/search', data={'query': query})
+            return self._request('/search', method='POST', data={'query': query})
 
         class Resource(RestResources.Resource):
             def publish(self):
-                return self._client.request(self._url + '/publish', method='POST')
+                return self._request('/publish', method='POST')
 
             comments = resources('/comments')
 
@@ -31,7 +31,7 @@ Example
 
     # managing resources
     client.users.list() # => [{'id': '1', 'name': 'John'}, ...]
-    client.users.create(name='Jane') # => {'id': '2'}
+    client.users.create({'name': 'Jane'}) # => {'id': '2'}
     client.users['1'].get() # => {'id': '1', 'name': 'John'}
     client.users['1'].delete()
 
