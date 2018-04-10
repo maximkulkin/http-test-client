@@ -29,14 +29,14 @@ class ApiNamespace(object):
     def __init__(self, path, klass):
         self.path = path
         m = PARAM_RE.match(path)
-        self._param_name = m.group(1) if m else None
+        self.param = m.group(1) if m else None
         self.klass = klass
 
     def __get__(self, obj, objtype=None):
-        if self._param_name:
-            raise AttributeError()
         if obj is None:
             return self
+        if self.param:
+            raise AttributeError()
         return self.klass(obj._client, obj._url + self.path)
 
 
@@ -179,7 +179,7 @@ class ApiMeta(type):
     def __new__(mcs, name, bases, attrs):
         params = {attr_name: attr_value
                   for attr_name, attr_value in attrs.iteritems()
-                  if isinstance(attr_value, ApiNamespace) and attr_value._param_name}
+                  if isinstance(attr_value, ApiNamespace) and attr_value.param}
 
         if len(params) > 1:
             raise ValueError('Multiple param APIs are not supported')
